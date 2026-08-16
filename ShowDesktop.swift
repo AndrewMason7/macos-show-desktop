@@ -19,6 +19,20 @@ final class DesktopManager {
         return FileManager.default.fileExists(atPath: stateFileURL.path)
     }
 
+    private static func setFinderWindowsCollapsed(_ collapsed: Bool) {
+        let scriptSource = """
+        tell application "Finder"
+            try
+                set collapsed of every window to \(collapsed ? "true" : "false")
+            end try
+        end tell
+        """
+        if let script = NSAppleScript(source: scriptSource) {
+            var error: NSDictionary?
+            script.executeAndReturnError(&error)
+        }
+    }
+
     static func hideAndSaveState() {
         lock.lock()
         defer { lock.unlock() }
@@ -42,6 +56,9 @@ final class DesktopManager {
                 targetApps.append(app)
             }
         }
+
+        // Collapse open Finder folder windows so desktop is 100% visible
+        setFinderWindowsCollapsed(true)
 
         guard !targetApps.isEmpty else {
             finderApp?.activate()
@@ -75,6 +92,9 @@ final class DesktopManager {
 
         guard FileManager.default.fileExists(atPath: stateFileURL.path) else { return false }
         defer { try? FileManager.default.removeItem(at: stateFileURL) }
+
+        // Restore open Finder folder windows
+        setFinderWindowsCollapsed(false)
 
         guard let raw = try? String(contentsOf: stateFileURL, encoding: .utf8) else { return false }
         let validLines = raw.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
