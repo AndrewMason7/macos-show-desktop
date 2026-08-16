@@ -2,10 +2,9 @@ import AppKit
 import Darwin
 import Foundation
 
-final class SafeDesktopManager {
+final class DesktopManager {
     private static let lock = NSLock()
     
-    // Secure user-private cache directory (prevents symlink attacks in /tmp)
     private static let stateFileURL: URL = {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
@@ -16,33 +15,10 @@ final class SafeDesktopManager {
         return appDir.appendingPathComponent("state.v2.txt")
     }()
 
-    private static let lockFileURL: URL = {
-        return stateFileURL.deletingLastPathComponent().appendingPathComponent("daemon.lock")
-    }()
-
-    // POSIX flock for sub-millisecond singleton daemon check (0 subshell forks)
-    static func acquireDaemonLock() -> Bool {
-        let fd = open(lockFileURL.path, O_CREAT | O_RDWR, 0o600)
-        guard fd >= 0 else { return false }
-        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
-            close(fd)
-            return false
-        }
-        return true
+    static func hasSavedState() -> Bool {
+        return FileManager.default.fileExists(atPath: stateFileURL.path)
     }
 
-    static func isDaemonActive() -> Bool {
-        let fd = open(lockFileURL.path, O_CREAT | O_RDWR, 0o600)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-        if flock(fd, LOCK_EX | LOCK_NB) == 0 {
-            flock(fd, LOCK_UN)
-            return false
-        }
-        return true
-    }
-
-    // Single-pass atomic state capture
     static func hideAndSaveState() {
         lock.lock()
         defer { lock.unlock() }
@@ -68,7 +44,7 @@ final class SafeDesktopManager {
         }
 
         guard !targetApps.isEmpty else {
-            finderApp?.activate(options: [.activateIgnoringOtherApps])
+            finderApp?.activate()
             return
         }
 
@@ -86,7 +62,7 @@ final class SafeDesktopManager {
         try? payload.write(to: stateFileURL, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateFileURL.path)
 
-        finderApp?.activate(options: [.activateIgnoringOtherApps])
+        finderApp?.activate()
 
         for app in targetApps {
             app.hide()
@@ -120,12 +96,12 @@ final class SafeDesktopManager {
             }
         }
 
-        frontToActivate?.activate(options: [.activateIgnoringOtherApps])
+        frontToActivate?.activate()
         return true
     }
 
     static func toggle() {
-        if FileManager.default.fileExists(atPath: stateFileURL.path) {
+        if hasSavedState() {
             _ = restoreSavedApps()
         } else {
             hideAndSaveState()
@@ -133,46 +109,4 @@ final class SafeDesktopManager {
     }
 }
 
-final class DesktopWatcher: NSObject {
-    func start() {
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(onActivation(_:)),
-            name: NSWorkspace.didActivateApplicationNotification,
-            object: nil
-        )
-    }
-
-    @objc private func onActivation(_ notif: Notification) {
-        guard let app = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == "com.apple.finder" else { return }
-        SafeDesktopManager.hideAndSaveState()
-    }
-}
-
-func ensureDaemonAlive() {
-    if !SafeDesktopManager.isDaemonActive() {
-        let binaryPath = "/Users/andrew/Documents/antigravity/splendid-volta/show_desktop"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = ["--daemon"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-    }
-}
-
-let args = CommandLine.arguments
-
-if args.contains("--daemon") {
-    guard SafeDesktopManager.acquireDaemonLock() else {
-        exit(0)
-    }
-    let watcher = DesktopWatcher()
-    watcher.start()
-    CFRunLoopRun()
-} else {
-    SafeDesktopManager.toggle()
-    ensureDaemonAlive()
-}
+DesktopManager.toggle()
