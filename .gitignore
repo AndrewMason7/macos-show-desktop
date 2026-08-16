@@ -1,0 +1,5 @@
+.DS_Store
+show_desktop
+*.o
+*.lock
+.build/
